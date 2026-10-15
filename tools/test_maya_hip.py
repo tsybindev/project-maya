@@ -63,6 +63,23 @@ class HipSetupTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 maya.check_pc(self.a)
 
+    def test_rdna2_card_is_usable_without_tuning_table(self):
+        # RX 6800 XT: installer accepts it (portable kernels, docs/AMD_GFX1030.md); no hipBLASLt table ships for
+        # gfx1030, so plain hipBLAS stays. 16 GB < 20 GB: no PREFILL_SUB override either.
+        self.gpus[0] = {"index": 0, "arch": "gfx1030", "vendor": "amd", "name": "AMD Radeon RX 6800 XT",
+                        "vram_gb": 16}
+        self.a.gpu = 0
+        pc = maya.check_pc(self.a)
+        self.assertEqual(pc["gpus"], [self.gpus[0]])
+        self.assertIn("gfx1030", pc["archs"])
+        p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
+                              self.root / "pack", "test", 8192, self.root / "data", None)
+        cfg = json.loads(p.read_text())
+        self.assertEqual(cfg["backend"], "hip")
+        self.assertEqual(cfg["gpu"], [0])
+        self.assertNotIn("STRATA_HIPBLASLT_TUNING", cfg["env"])
+        self.assertNotIn("STRATA_GLM_PREFILL_SUB", cfg["env"])
+
     def test_two_gpu_split_config(self):
         tables = self.root / "tools/hip"
         tables.mkdir(parents=True)
@@ -188,7 +205,7 @@ class HipSetupTests(unittest.TestCase):
         self.assertIn("-DSTRATA_ENABLE_HIP=ON", conf)
         self.assertIn("-DSTRATA_ENABLE_CUDA=OFF", conf)
         self.assertIn("-DSTRATA_PREFILL_MMQ=ON", conf)
-        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151", conf)
+        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=" + ";".join(maya.HIP_ARCHS), conf)
         self.assertEqual(env["ROCM_PATH"], str(self.rocm))
         self.assertEqual(meta["backend"], "hip")
 
@@ -663,7 +680,7 @@ class WindowsHipSetupTests(unittest.TestCase):
                      f"-DCMAKE_HIP_COMPILER={root}/lib/llvm/bin/clang++.exe",
                      f"-DCMAKE_HIP_COMPILER_ROCM_ROOT={root}",
                      "-DSTRATA_ENABLE_HIP=ON", "-DSTRATA_ENABLE_CUDA=OFF", "-DSTRATA_PREFILL_MMQ=ON",
-                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151"):
+                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=" + ";".join(maya.HIP_ARCHS)):
             self.assertIn(want, conf)
         if " " not in root:
             self.assertIn(f"-DCMAKE_HIP_FLAGS=--rocm-path={root} --rocm-device-lib-path={root}/lib/llvm/amdgcn/bitcode",

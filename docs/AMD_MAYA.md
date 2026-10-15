@@ -1,7 +1,8 @@
-# Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
+# Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070, Strix Halo / Gorgon Halo and RDNA2
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
-engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two discrete cards that split the
+engine on `gfx1100`, `gfx1201`, `gfx1151` (Strix Halo, Gorgon Halo) and, experimentally,
+`gfx103x` (RDNA2: RX 6800 / 6900, RX 6700, RX 6600 - see [RDNA2](#rdna2-gfx103x-experimental)). It uses one GPU, or two discrete cards that split the
 layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer;
 Linux users can opt into the existing [CPU image encoder](#cpu-image-encoder-on-linux).
 Windows: see [Windows](#windows).
@@ -22,8 +23,8 @@ The first setup downloads about 96.5 GB of weights and verifies the SHA-256
 hash of each shard. `--gguf-dir DIR` uses existing files instead. GPU numbers
 are the kernel KFD topology order shown by `--check`; on the test machine the
 7900 XT is GPU 0, an R9700 is GPU 1, and the integrated GPU is GPU 2. This
-installer accepts `gfx1100`, `gfx1201` and `gfx1151` and compiles one binary for
-`gfx1100;gfx1201;gfx1151`.
+installer accepts `gfx1100`, `gfx1201`, `gfx1151`, `gfx1030`, `gfx1031` and `gfx1032` and compiles one binary for
+all of them.
 Configs are named `maya-<quant>-hip.json` and
 select the AMD device through `HIP_VISIBLE_DEVICES`.
 
@@ -160,6 +161,27 @@ text (`STRATA_GLM_MTP_DECODE`, on by default on `gfx115x` only). On the Gorgon H
 8065S, Maya-S, 32K context), 256-token answers run at 28.4-29.6 tokens/s to short prompts and at 23.2-23.5 after
 3K- and 8K-token prompts, against 18.4-19.7 without it; 3K- and 8K-token prompts read at 271 and 278 tokens/s
 (the fused prompt experts and the `wmma2` attention, both on by default on `gfx1151`).
+
+## RDNA2 (gfx103x, experimental)
+
+RX 6800 / 6900 (`gfx1030`), RX 6700 (`gfx1031`) and RX 6600 (`gfx1032`) are
+accepted by the installer and compile into the same binary, but run on portable
+kernels only (details: [docs/AMD_GFX1030.md](AMD_GFX1030.md)):
+
+- prompt attention: always the F32 kernel (`mla_attn_path` returns F32 where both
+  `mla_f16q_supported()` and `mla_wmma2_supported()` are false; an explicit
+  `STRATA_GLM_PREFILL_ATTN=f16q|wmma2` logs once and falls back). The FP16
+  hipBLAS products stay on: rocBLAS ships `gfx1030` kernels.
+- no `wmma2` attention, no fused RDNA4 prompt experts, no MTP decode
+  (those dispatch on `gfx11*`/`gfx12*`/`gfx115*` names and stay off by themselves).
+- no hipBLASLt tuning table ships for `gfx103x`: the config uses plain hipBLAS.
+- ROCm 7 with the `rocwmma` headers installed (the host pass includes them even
+  when building for `gfx103x` only).
+
+Expect it to run, not to be fast: 16 GB VRAM holds a fraction of Maya-S's
+96.5 GB, so most experts stream from RAM/SSD. Not measured yet; `--bench` numbers
+welcome (see [tracking issue #6](https://github.com/mw00/project-maya/issues/6)
+for how to report them).
 
 ## Windows
 

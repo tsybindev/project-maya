@@ -437,12 +437,17 @@ def pip_install(packages, what):
 
 
 AMD_NAMES = {"gfx1100": "AMD Radeon RX 7900 series (gfx1100)",
-             "gfx1201": "AMD Radeon RX 9070 / AI PRO R9700 (gfx1201)"}   # when sysfs has no product name
+             "gfx1201": "AMD Radeon RX 9070 / AI PRO R9700 (gfx1201)",
+             "gfx1030": "AMD Radeon RX 6800 / 6900 series (gfx1030)",
+             "gfx1031": "AMD Radeon RX 6700 series (gfx1031)",
+             "gfx1032": "AMD Radeon RX 6600 series (gfx1032)"}   # when sysfs has no product name
 # Windows without ROCm's hipInfo yet: the architecture from the adapter's PCI device ID (Navi 31, Navi 48, the
-# Strix Halo / Gorgon Halo APU), else from its name ("AMD Radeon(TM) 8060S Graphics", 8050S, 8065S, ...)
-AMD_DEVICE_ARCHS = {"744c": "gfx1100", "7550": "gfx1201", "7551": "gfx1201", "1586": "gfx1151"}
+# Strix Halo / Gorgon Halo APU, Navi 21/22/23), else from its name ("AMD Radeon(TM) 8060S Graphics", 8050S, 8065S, ...)
+AMD_DEVICE_ARCHS = {"744c": "gfx1100", "7550": "gfx1201", "7551": "gfx1201", "1586": "gfx1151",
+                    "73bf": "gfx1030", "73af": "gfx1030", "73df": "gfx1031", "73ff": "gfx1032"}
 AMD_NAME_ARCHS = ((r"Radeon(?:\s*\(TM\))?\s+80[4-6]\dS", "gfx1151"), (r"RX\s*7900", "gfx1100"),
-                  (r"RX\s*9070|R9700", "gfx1201"))
+                  (r"RX\s*9070|R9700", "gfx1201"),
+                  (r"RX\s*68\d0|RX\s*69\d0", "gfx1030"), (r"RX\s*67\d0", "gfx1031"), (r"RX\s*66\d0", "gfx1032"))
 
 
 def parse_hipinfo(text: str) -> list:

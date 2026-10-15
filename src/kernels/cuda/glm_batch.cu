@@ -4,9 +4,16 @@
 // (same operation order where the order is observable), so a prompt read in chunks leaves the state the token path
 // would have left up to float rounding - the projections around them (FP16 tensor-core GEMMs instead of q8_1 dot
 // products) are where the two paths really differ, as llama.cpp's batched and one-token paths do.
-#if defined(STRATA_USE_HIP)
+#if defined(STRATA_USE_HIP) && (!defined(__HIP_DEVICE_COMPILE__) || !__HIP_DEVICE_COMPILE__ || \
+    defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
+    defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__) || \
+    defined(__gfx1200__) || defined(__gfx1201__))
+// rocWMMA knows CDNA and gfx11/gfx12 only (its config.hpp static-asserts on anything else, e.g. RDNA2 gfx103x):
+// the device pass for an unsupported arch skips it (the F32 attention below stays), the host pass and the
+// supported-arch device passes keep it.
 // The HIP bf16/fp8 headers rocWMMA pulls in define the __shfl_*_sync names that the force-included hip_compat macros
 // remap; hide the macros while they are read.
+#define STRATA_HIP_ROCWMMA 1
 #pragma push_macro("__shfl_xor_sync")
 #undef __shfl_xor_sync
 #pragma push_macro("__shfl_down_sync")
@@ -1232,7 +1239,7 @@ __global__ void __launch_bounds__(256) mla_attn_mma_kernel(const float* __restri
 }
 #endif
 
-#if defined(STRATA_USE_HIP)
+#if defined(STRATA_USE_HIP) && defined(STRATA_HIP_ROCWMMA)
 // mla_attn_tc_kernel on RDNA3 WMMA (rocWMMA).  RDNA allows 64 KiB of LDS a workgroup, the CUDA kernel takes 91,
 // so Q (FP16, from the q_abs product) stays in registers - each warp holds its 64-wide K slice of the 16 heads as four
 // A fragments - and the cells go in chunks of 16: O 32 KiB (F32) + L 16 KiB + score partials 8 KiB + P 0.5 KiB.
@@ -1348,7 +1355,10 @@ __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __re
         o[i] = L > 0.0f ? sO[i] / L : 0.0f;
     }
 }
+#endif  // STRATA_HIP_ROCWMMA: the kernel above is the only rocWMMA user; the wave32 WMMA kernel below uses
+        // compiler builtins only, so it compiles for every arch (and traps where no WMMA instruction exists)
 
+#if defined(STRATA_USE_HIP)
 using mla2_h16 = _Float16 __attribute__((ext_vector_type(16)));
 using mla2_f8 = float __attribute__((ext_vector_type(8)));
 __device__ __forceinline__ mla2_f8 mla2_wmma(mla2_h16 a, mla2_h16 b, mla2_f8 c) {
@@ -1362,6 +1372,8 @@ __device__ __forceinline__ mla2_f8 mla2_wmma(mla2_h16 a, mla2_h16 b, mla2_f8 c) 
     for (int i = 0; i < 8; ++i) { aa[i] = a[k0 + i]; bb[i] = b[k0 + i]; }
     return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(aa, bb, c);
 #else
+    // RDNA2 (gfx103x) has no WMMA instruction; the runtime never launches this kernel there
+    // (mla_wmma2_supported() is false) - trap instead of silently wrong results.
     __builtin_trap();
     return c;
 #endif
@@ -2003,6 +2015,7 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
 }
 
 #if defined(STRATA_USE_HIP)
+#if defined(STRATA_HIP_ROCWMMA)
 void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
                    int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
     if (T <= 0) return;
@@ -2017,8 +2030,41 @@ void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, c
     check("mla_attn_wmma");
 }
 
-bool mla_wmma2_supported() { const int a = mla_wmma2_arch(); return a == 1 || a == 2 || a == 4; }
-bool mla_wmma2_default() { const int a = mla_wmma2_arch(); return a == 1 || a == 4; }
+/// The rocWMMA attention above runs where rocWMMA compiles: CDNA and gfx11/gfx12 (never on RDNA2 gfx103x,
+/// whose device pass skips the rocWMMA kernel).
+bool mla_f16q_supported() {
+#if defined(STRATA_HIP_ROCWMMA)
+    const int a = mla_wmma2_arch();
+    return a == 1 || a == 2 || a == 4;
+#else
+    return false;
+#endif
+}
+#else
+void mla_attn_f16q(const uint16_t*, const uint16_t*, const int*, const int*, int, int, int, float, int, float*,
+                   cudaStream_t, bool) {
+    std::fprintf(stderr, "glm_batch mla_attn_f16q: this engine has no rocWMMA code for this GPU\n");
+}
+
+bool mla_f16q_supported() { return false; }
+#endif
+
+bool mla_wmma2_supported() {
+#if defined(STRATA_HIP_ROCWMMA)
+    const int a = mla_wmma2_arch();
+    return a == 1 || a == 2 || a == 4;
+#else
+    return false;
+#endif
+}
+bool mla_wmma2_default() {
+#if defined(STRATA_HIP_ROCWMMA)
+    const int a = mla_wmma2_arch();
+    return a == 1 || a == 4;
+#else
+    return false;
+#endif
+}
 
 void mla_attn_wmma2(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
                     int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {

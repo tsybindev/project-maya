@@ -95,9 +95,12 @@ void dsa_select(const float* score, int score_ld, int p0, int kpool, int top_poo
                 int n_sel_max, int* cells, int* n_sel, cudaStream_t s);
 #if defined(STRATA_USE_HIP)
 /// The same attention with Q in FP16 ([T][n_head][512]) on the WMMA units (rocWMMA, RDNA3/RDNA4): FP16 operands, F32
-/// accumulation and softmax.  n_head % 16 == 0, kv_lora 512.
+/// accumulation and softmax.  n_head % 16 == 0, kv_lora 512. Where the engine has no rocWMMA code for the GPU
+/// (RDNA2 gfx103x) this logs and returns, leaving the output untouched - the prompt path never calls it there.
 void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
                    int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8 = false);
+/// True where the rocWMMA attention above runs (gfx11/gfx12); false on RDNA2 gfx103x.
+bool mla_f16q_supported();
 /// The same attention with Q in F32 on wave32 WMMA intrinsics (gfx11/gfx12): the FP32 query and softmax probability
 /// are each split into FP16 high + residual, both products through WMMA with F32 accumulation and online softmax.
 /// n_head % 16 == 0, kv_lora 512. lat_q8 expands INT8 codes with one FP16 scale per 32 values as they are loaded.

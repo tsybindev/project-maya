@@ -114,7 +114,11 @@ int main() {
     std::printf("GLM prefill attention: max absolute error %.3e (tolerance 5e-5)\n", worst);
     if (worst > 5e-5) return 5;
 
-    // The rocWMMA kernel (FP16 Q) against the F32 kernel on the same FP16-rounded Q: random data, many cells
+    // The rocWMMA kernel (FP16 Q) against the F32 kernel on the same FP16-rounded Q: random data, many cells.
+    // Skipped where the engine has no rocWMMA code for the GPU (RDNA2 gfx103x: no WMMA instruction).
+    if (!strata::kernels::glmb::mla_f16q_supported()) {
+        std::puts("GLM prefill WMMA attention: skipped (unsupported architecture)");
+    } else {
     {
         constexpr int T2 = 48, H2 = 32, rows2 = 2048, stride2 = 700;
         std::vector<float> q2((size_t) T2 * H2 * KV), lat2((size_t) rows2 * KV), a(q2.size()), b(q2.size());
@@ -172,6 +176,7 @@ int main() {
             if (rel > 1e-3 || worst_head > 5e-3) return 6;
         }
         hipFree(dq16); hipFree(dq); hipFree(dl); hipFree(da); hipFree(db); hipFree(dc); hipFree(dn);
+    }
     }
 
     // The wave32 WMMA kernel (F32 Q, FP16 high/residual) against the F32 kernel: random data, partial 16/32-cell
